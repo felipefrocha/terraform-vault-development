@@ -1,0 +1,150 @@
+#!/bin/bash
+set -e
+
+RED='\e[1;31m\e[1;42m'
+NC='\033[0m'
+
+export VAULT_ADDR='http://127.0.0.1:8200'
+
+function log_error() {
+  cat <<EOF
+Not valid environment, you shoud provide a valid environment: 
+  main; 
+i.e:  
+  $ ${0} -a"
+EOF
+  exit 5
+}
+
+function help_menu() {
+  cat <<EOF
+Usage: ${0} (-h | -l | -a)
+
+ARGUMENTS:
+    USERNAME
+    PASSWORD                
+                      
+OPTIONS:
+   -h| --help                        Show this message
+   -l| --login                       Login into Hubit Security Vault with your account valid for 8h
+   -s| --aws-s3                      Get s3 role for aws credentials valid for 1h
+   -e| --aws-ec2                     Get ec2 role for aws credentials valid for 1h
+   
+
+EXAMPLES:
+   Login into Labs Vault with Your user:
+        $ ${0} -l <username> <password>
+
+   Get AWS Credentials for using it during 1h with the backend role permissions:
+        $ # after login
+        $ ${0} -e
+        $ ${0} -s
+
+   Get help:
+        $ ${0} -h
+EOF
+  exit 0
+}
+
+function login() {
+  local username="${1}"
+  local password="${2}"
+
+  vault login -method=userpass -path=local username="${username}" password="${password}"
+  exit 0
+}
+
+function select_env() {
+  case "${1}" in
+  main)
+    local env=""
+    shift
+    ;;
+  prd)
+    local env="-prd"
+    shift
+    ;;
+  hml)
+    local env="-hml"
+    shift
+    ;;
+  dev)
+    local env="-dev"
+    shift
+    ;;
+  *)
+    log_error
+    ;;
+  esac
+  echo ${env}
+}
+
+function ec2_aws_creds() {
+  # echo "Environment selected ${env}"
+  vault read me/sts/me-ec2 ttl=15m |
+    tr -d ' ' |
+    sed \
+      -e 's/access_key/export AWS_ACCESS_KEY_ID=/g' \
+      -e 's/secret_key/export AWS_SECRET_ACCESS_KEY=/g' \
+      -e 's/security_token/export AWS_SESSION_TOKEN=/g' |
+    grep AWS
+  exit 0
+}
+
+function s3_aws_creds() {
+  # echo "Environment selected ${env}"
+  vault read me/sts/me-s3 ttl=15m |
+    tr -d ' ' |
+    sed \
+      -e 's/access_key/export AWS_ACCESS_KEY_ID=/g' \
+      -e 's/secret_key/export AWS_SECRET_ACCESS_KEY=/g' \
+      -e 's/security_token/export AWS_SESSION_TOKEN=/g' |
+    grep AWS
+  exit 0
+}
+
+function postgres() {
+  # echo "Environment selected ${env}"
+  vault read postgres/creds/dba-role |
+    grep -E "username|password" | sed -e "s|           |=|g"
+  exit 0
+}
+
+[ "$#" -eq 0 ] && help_menu
+
+while [[ "$#" > 0 ]]; do
+  case "${1}" in
+  -l | --login)
+    if [ "$#" -lt 3 ] && [ -z "$PAT" ]; then
+      echo "You should provide 2 args: hubitsecuritycli <user> <pass>" >&2
+      exit 3
+    else
+      login ${2} ${3}
+    fi
+    shift
+    ;;
+  -s | --aws-s3)
+    s3_aws_creds ${2}
+    shift
+    ;;
+  -e | --aws-ec2)
+    ec2_aws_creds ${2}
+    shift
+    ;;
+  -p | --psql)
+    postgres ${2}
+    shift
+    ;;
+  -h | --help)
+    help_menu
+    shift
+    ;;
+  *)
+    echo "${1} is not a valid flag, try running: ${0} --help"
+    help_menu
+    ;;
+  esac
+  shift
+done
+
+exit 0
